@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromToken } from "@/lib/auth";
+import { GoogleGenAI } from "@google/genai";
+import { getGeminiEmbedding } from "@/lib/embedding";
+import pdf from "pdf-parse";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 export async function GET(req: Request) {
 	const token = req.headers.get("authorization") || "";
@@ -15,49 +20,163 @@ export async function GET(req: Request) {
 	return NextResponse.json({ content });
 }
 
-export async function POST(req: Request) {
-	const token = req.headers.get("authorization") || "";
-	const user = await getUserFromToken(token);
-	if (!user)
-		return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+// ---------------- Helper: Generate Title & Description ----------------
+async function generateTitleDescription(content: string) {
+	const prompt = `
+Summarize the following content:
+1. Provide a short, clear TITLE (max 8 words)
+2. Provide a concise DESCRIPTION (1–2 sentences)
 
-	const { type, link, fileName, description } = await req.json();
+Content:
+${content.slice(0, 2000)}
 
-	// DAILY LIMIT logic
-	const todayCount = await prisma.content.count({
-		where: {
-			userId: user.id,
-			createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-		},
-	});
-	if (todayCount >= 10) {
-		return NextResponse.json(
-			{ message: "Daily limit reached" },
-			{ status: 429 }
-		);
+Respond ONLY as JSON: { "title": "...", "description": "..." }
+`;
+
+	try {
+		const genResp = await ai.models.generateContent({
+			model: "gemini-2.5-flash",
+			contents: [{ role: "user", parts: [{ text: prompt }] }],
+			config: { responseMimeType: "application/json" },
+		});
+
+		let jsonText =
+			genResp.candidates?.[0]?.content?.parts?.[0]?.text ||
+			genResp.text ||
+			"{}";
+
+		jsonText = jsonText
+			.replace(/^```[a-zA-Z]*\n?/, "") // removes opening triple backticks + optional language
+			.replace(/```/g, "") // removes all other triple backticks
+			.trim();
+
+		let parsed;
+		try {
+			parsed = JSON.parse(jsonText);
+		} catch {
+			parsed = { title: "Untitled Memory", description: content.slice(0, 200) };
+		}
+
+		return {
+			title:
+				typeof parsed.title === "string" ? parsed.title : "Untitled Memory",
+			description:
+				typeof parsed.description === "string"
+					? parsed.description
+					: content.slice(0, 200),
+		};
+	} catch (err) {
+		console.warn("Title/description generation failed:", err);
+		return { title: "Untitled Memory", description: content.slice(0, 200) };
 	}
+}
 
-	// Uncomment to block document type by canUploadDocuments
-	// if (type === "document" && !user.canUploadDocuments) {
-	//   return NextResponse.json({ message: "Document upload not allowed" }, { status: 403 });
-	// }
+// ---------------- Helper: Extract Remote PDF Text ----------------
+async function extractPdfTextFromUrl(url: string) {
+	const res = await fetch(url);
+	if (!res.ok) {
+		throw new Error(`Failed to fetch PDF from URL: ${url}`);
+	}
+	const buffer = Buffer.from(await res.arrayBuffer());
+	const data = await pdf(buffer);
+	return data.text || "";
+}
 
-	const content = await prisma.content.create({
-		data: {
+export async function POST(req: Request) {
+	try {
+		const token = req.headers.get("authorization") || "";
+		const user = await getUserFromToken(token);
+		if (!user)
+			return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+
+		const {
 			type,
 			link,
 			fileName,
-			description,
-			userId: user.id,
-		},
-	});
+			description: userDesc,
+			title: userTitle,
+			noteContent,
+		} = await req.json();
 
-	await prisma.user.update({
-		where: { id: user.id },
-		data: { contentUploadCount: { increment: 1 } },
-	});
+		// ---------- Rate limit ----------
+		const todayCount = await prisma.content.count({
+			where: {
+				userId: user.id,
+				createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+			},
+		});
+		if (todayCount >= 10) {
+			return NextResponse.json(
+				{ message: "Daily limit reached" },
+				{ status: 429 }
+			);
+		}
 
-	return NextResponse.json(content);
+		// ---------- Extract text if needed ----------
+		let contentText = userDesc || "";
+		if (!userDesc && type === "document" && link) {
+			try {
+				contentText = await extractPdfTextFromUrl(link);
+			} catch (pdfErr) {
+				console.error("PDF extraction failed:", pdfErr);
+			}
+		}
+		if (!userDesc && type === "note" && noteContent) {
+			contentText = noteContent;
+		}
+		if (!contentText.trim()) {
+			contentText = fileName || link || "Untitled";
+		}
+
+		// ---------- Generate title/description if missing ----------
+		let finalTitle = userTitle;
+		let finalDescription = userDesc;
+		if (!finalTitle || !finalDescription) {
+			const generated = await generateTitleDescription(contentText);
+			if (!finalTitle) finalTitle = generated.title;
+			if (!finalDescription) finalDescription = generated.description;
+		}
+
+		// ---------- Generate embedding ----------
+		const embedding = await getGeminiEmbedding(
+			`${finalTitle}\n${finalDescription}`
+		);
+
+		// ---------- Create DB row ----------
+		const content = await prisma.content.create({
+			data: {
+				type,
+				link,
+				fileName,
+				description: finalDescription,
+				title: finalTitle,
+				userId: user.id,
+			},
+		});
+
+		// ---------- Store embedding (raw SQL) ----------
+		if (embedding) {
+			await prisma.$executeRawUnsafe(
+				`UPDATE "Content" SET embedding = $1 WHERE id = $2`,
+				embedding,
+				content.id
+			);
+		}
+
+		// ---------- Increment count ----------
+		await prisma.user.update({
+			where: { id: user.id },
+			data: { contentUploadCount: { increment: 1 } },
+		});
+
+		return NextResponse.json(content);
+	} catch (error) {
+		console.error("Error handling /content POST:", error);
+		return NextResponse.json(
+			{ message: "Error saving content" },
+			{ status: 500 }
+		);
+	}
 }
 
 export async function DELETE(req: Request) {

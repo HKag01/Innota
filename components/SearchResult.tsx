@@ -95,7 +95,7 @@ const SearchResult: React.FC<SearchResultProps> = ({
 				{/* Markdown Content */}
 				<div className="prose prose-lg dark:prose-invert max-w-none">
 					<ReactMarkdown
-						className="text-gray-800 dark:text-gray-200"
+						// className="text-gray-800 dark:text-gray-200"
 						components={markdownComponents}
 					>
 						{searchResult}
