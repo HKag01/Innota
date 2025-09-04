@@ -299,6 +299,8 @@ const VectorSearch: React.FC = () => {
 										description={memory.description}
 										url={memory.link || ""}
 										imageUrl={memory.imageUrl}
+										thumbnail={memory.thumbnail}
+										status={memory.status}
 										id={memory._id}
 									/>
 								))}

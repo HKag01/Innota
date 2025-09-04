@@ -11,6 +11,8 @@ export interface Memory {
 	type: string;
 	link?: string;
 	imageUrl?: string;
+	thumbnail?: string;
+	status?: string;
 }
 interface AllNotesProps {
 	memories: Memory[];

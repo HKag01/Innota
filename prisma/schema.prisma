@@ -22,17 +22,36 @@ model User {
   searches SearchLog[]
 }
 
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Content {
-  id          String                      @id @default(uuid())
-  user        User                        @relation(fields: [userId], references: [id])
+  id          String           @id @default(uuid())
+  user        User             @relation(fields: [userId], references: [id])
   userId      String
-  title       String?
+  title       String
   type        String
   link        String?
   fileName    String?
-  description String?
-  embedding   Unsupported("vector(768)")?
-  createdAt   DateTime                    @default(now())
+  description String
+  thumbnail   String?          // Base64 encoded thumbnail image
+  status      ProcessingStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+
+  // One Content has many Chunks
+  chunks ContentChunk[]
+}
+
+model ContentChunk {
+  id        String                      @id @default(uuid())
+  content   Content                     @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  contentId String
+  chunkText String
+  embedding Unsupported("vector(768)")?
 }
 
 model SearchLog {

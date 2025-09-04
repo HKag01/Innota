@@ -38,6 +38,16 @@ export default function HomePage() {
 
 			setMemories(res.data.content);
 			console.log("Fetched all notes:", res.data);
+			
+			// Check if there are any pending documents and start polling
+			const pendingDocs = res.data.content.filter(
+				item => item.type === 'document' && (item.status === 'PENDING' || item.status === 'PROCESSING')
+			);
+			
+			if (pendingDocs.length > 0) {
+				console.log(`Found ${pendingDocs.length} pending documents, starting polling...`);
+				startPolling();
+			}
 		} catch (err) {
 			console.error("Error fetching memories", err);
 		}

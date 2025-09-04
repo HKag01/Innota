@@ -1,4 +1,3 @@
-// app/api/v1/vector-search/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { GoogleGenAI } from "@google/genai";
@@ -46,22 +45,31 @@ export async function POST(req: Request) {
 		// 1️⃣ Embed the query
 		const queryEmbedding = await getGeminiEmbedding(query);
 
-		// 2️⃣ Vector search (raw SQL because embedding is Unsupported)
-		const results = await prisma.$queryRaw`
-  SELECT id, title, description, link, type, "fileName", "createdAt"
-  FROM "Content"
-  WHERE "userId" = ${user.id}
-    AND embedding IS NOT NULL
-    ${
-			type && type !== "all-memories"
-				? Prisma.sql`AND type = ${type}`
-				: Prisma.sql``
-		}
-  ORDER BY embedding <-> ${Prisma.sql`ARRAY[${Prisma.join(
-		queryEmbedding
-	)}]::vector`}
-  LIMIT 5
-`;
+		// 2️⃣ Vector search on ContentChunk table for better context
+		const results: any[] = await prisma.$queryRaw`
+			SELECT
+				cc."chunkText",
+				c.id,
+				c.title,
+				c.description,
+				c.link,
+				c.type,
+				c."fileName",
+				c.thumbnail,
+				c."createdAt"
+			FROM "ContentChunk" AS cc
+			JOIN "Content" AS c ON cc."contentId" = c.id
+			WHERE c."userId" = ${user.id} AND c.status = 'COMPLETED'
+			${
+				type && type !== "all-memories"
+					? Prisma.sql`AND c.type = ${type}`
+					: Prisma.sql``
+			}
+			ORDER BY cc.embedding <-> ${Prisma.sql`ARRAY[${Prisma.join(
+				queryEmbedding
+			)}]::vector`}
+			LIMIT 5
+		`;
 
 		if (!results.length) {
 			return NextResponse.json({
@@ -70,29 +78,25 @@ export async function POST(req: Request) {
 			});
 		}
 
-		// 3️⃣ Build context
+		// 3️⃣ Build context from chunk text for richer answers
 		const contextString = results
 			.map(
-				(r, i) => `Memory ${i + 1}
-Title: ${r.title || ""}
-Description: ${r.description || ""}
-Type: ${r.type || ""}
-Link: ${r.link || ""}
-Uploaded: ${r.createdAt?.toISOString() || ""}
-`
+				(r, i) =>
+					`Memory ${i + 1} (Source: ${r.fileName || r.title})\n---\n${
+						r.chunkText
+					}\n---\n`
 			)
-			.join("\n\n");
+			.join("\n");
 
-		// 4️⃣ Generate Gemini answer
-		const prompt = `
-You are an assistant answering based only on the following user memories:
+		// 4️⃣ Generate Gemini answer with improved prompt
+		const prompt = `You are a helpful 'second brain' assistant. Based ONLY on the following memories, answer the user's question. Be concise and cite the sources used.
 
+Memories:
 ${contextString}
 
 Question: "${query}"
 
-Answer using ONLY these memories. Cite memory numbers if possible.
-`;
+Answer:`;
 
 		const aiResp = await ai.models.generateContent({
 			model: "gemini-1.5-flash",
@@ -107,8 +111,11 @@ Answer using ONLY these memories. Cite memory numbers if possible.
 		// 5️⃣ Log search
 		await prisma.searchLog.create({ data: { userId: user.id, query } });
 
-		// 6️⃣ Return combined answer + sources
-		return NextResponse.json({ answer, content: results });
+		// 6️⃣ Return unique content sources (deduplicated by content ID)
+		const uniqueContent = Array.from(
+			new Map(results.map((item) => [item.id, item])).values()
+		);
+		return NextResponse.json({ answer, content: uniqueContent });
 	} catch (err) {
 		console.error("Vector search error:", err);
 		return NextResponse.json(

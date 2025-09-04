@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getUserFromToken } from "@/lib/auth";
 import { GoogleGenAI } from "@google/genai";
-import { getGeminiEmbedding } from "@/lib/embedding";
-import pdf from "pdf-parse";
+import { processPdf } from "@/lib/jobs";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
@@ -16,6 +15,17 @@ export async function GET(req: Request) {
 	const content = await prisma.content.findMany({
 		where: { userId: user.id },
 		orderBy: { createdAt: "desc" },
+		select: {
+			id: true,
+			title: true,
+			description: true,
+			type: true,
+			link: true,
+			fileName: true,
+			thumbnail: true,
+			status: true,
+			createdAt: true,
+		},
 	});
 	return NextResponse.json({ content });
 }
@@ -35,7 +45,7 @@ Respond ONLY as JSON: { "title": "...", "description": "..." }
 
 	try {
 		const genResp = await ai.models.generateContent({
-			model: "gemini-2.5-flash",
+			model: "gemini-1.5-flash",
 			contents: [{ role: "user", parts: [{ text: prompt }] }],
 			config: { responseMimeType: "application/json" },
 		});
@@ -112,55 +122,50 @@ export async function POST(req: Request) {
 			);
 		}
 
-		// ---------- Extract text if needed ----------
-		let contentText = userDesc || "";
-		if (!userDesc && type === "document" && link) {
-			try {
-				contentText = await extractPdfTextFromUrl(link);
-			} catch (pdfErr) {
-				console.error("PDF extraction failed:", pdfErr);
+		// ---------- Handle different content types ----------
+		let tempTitle = userTitle || fileName || "New Memory";
+		let tempDescription =
+			userDesc || "This memory is currently being processed.";
+
+		// For non-document types, generate title/description immediately
+		if (type !== "document") {
+			let contentText = userDesc || "";
+			if (type === "note" && noteContent) {
+				contentText = noteContent;
+			}
+			if (!contentText.trim()) {
+				contentText = fileName || link || "Untitled";
+			}
+
+			if (!userTitle || !userDesc) {
+				const generated = await generateTitleDescription(contentText);
+				if (!userTitle) tempTitle = generated.title;
+				if (!userDesc) tempDescription = generated.description;
 			}
 		}
-		if (!userDesc && type === "note" && noteContent) {
-			contentText = noteContent;
-		}
-		if (!contentText.trim()) {
-			contentText = fileName || link || "Untitled";
-		}
 
-		// ---------- Generate title/description if missing ----------
-		let finalTitle = userTitle;
-		let finalDescription = userDesc;
-		if (!finalTitle || !finalDescription) {
-			const generated = await generateTitleDescription(contentText);
-			if (!finalTitle) finalTitle = generated.title;
-			if (!finalDescription) finalDescription = generated.description;
-		}
-
-		// ---------- Generate embedding ----------
-		const embedding = await getGeminiEmbedding(
-			`${finalTitle}\n${finalDescription}`
-		);
-
-		// ---------- Create DB row ----------
+		// ---------- Create DB row with PENDING status for documents ----------
 		const content = await prisma.content.create({
 			data: {
 				type,
 				link,
 				fileName,
-				description: finalDescription,
-				title: finalTitle,
+				description: tempDescription,
+				title: tempTitle,
 				userId: user.id,
+				status: type === "document" ? "PENDING" : "COMPLETED",
 			},
 		});
 
-		// ---------- Store embedding (raw SQL) ----------
-		if (embedding) {
-			await prisma.$executeRawUnsafe(
-				`UPDATE "Content" SET embedding = $1 WHERE id = $2`,
-				embedding,
-				content.id
-			);
+		// ---------- Trigger background processing for documents ----------
+		if (type === "document" && link) {
+			// Don't await - let it run in background
+			processPdf(content.id, link).catch((error) => {
+				console.error(
+					`Background PDF processing failed for ${content.id}:`,
+					error
+				);
+			});
 		}
 
 		// ---------- Increment count ----------
@@ -168,6 +173,17 @@ export async function POST(req: Request) {
 			where: { id: user.id },
 			data: { contentUploadCount: { increment: 1 } },
 		});
+
+		// ---------- Return appropriate response ----------
+		if (type === "document") {
+			return NextResponse.json(
+				{
+					message: "Document upload received and is being processed.",
+					content,
+				},
+				{ status: 202 } // 202 Accepted
+			);
+		}
 
 		return NextResponse.json(content);
 	} catch (error) {

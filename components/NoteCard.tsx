@@ -18,6 +18,8 @@ type NoteProps = {
 	description: string;
 	url: string;
 	imageUrl?: string;
+	thumbnail?: string;
+	status?: string;
 	tags?: string[];
 	className?: string;
 	handledelete?: () => void;
@@ -30,6 +32,8 @@ export default function Note2({
 	description,
 	imageUrl,
 	url,
+	thumbnail,
+	status,
 }: NoteProps) {
 	return (
 		<div className="">
@@ -45,7 +49,14 @@ export default function Note2({
 			{type === "video" && <VideoNote url={url} />}
 			{type === "tweet" && <TweetNote url={url} />}
 			{type === "note" && <TextNote description={description} />}
-			{type === "document" && <DocumentNote filename={title} url={url} />}
+			{type === "document" && (
+				<DocumentNote 
+					filename={title} 
+					url={url} 
+					thumbnail={thumbnail}
+					status={status}
+				/>
+			)}
 		</div>
 	);
 }
