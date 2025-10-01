@@ -81,17 +81,6 @@ Respond ONLY as JSON: { "title": "...", "description": "..." }
 	}
 }
 
-// ---------------- Helper: Extract Remote PDF Text ----------------
-async function extractPdfTextFromUrl(url: string) {
-	const res = await fetch(url);
-	if (!res.ok) {
-		throw new Error(`Failed to fetch PDF from URL: ${url}`);
-	}
-	const buffer = Buffer.from(await res.arrayBuffer());
-	const data = await pdf(buffer);
-	return data.text || "";
-}
-
 export async function POST(req: Request) {
 	try {
 		const token = req.headers.get("authorization") || "";

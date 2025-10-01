@@ -116,7 +116,7 @@ async function generatePdfThumbnail(buffer: Buffer): Promise<string | null> {
 		return dataUrl;
 	} catch (error) {
 		console.error("PDF thumbnail generation failed:", error);
-		console.error("Error details:", error.message);
+		console.error("Error details:", error);
 
 		// Return null instead of throwing to allow PDF processing to continue
 		return null;

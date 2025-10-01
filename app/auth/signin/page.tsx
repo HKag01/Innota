@@ -3,11 +3,12 @@
 import UserSignForm, { userSchemaType } from "@/components/SigninUp";
 import { signIn } from "@/services/userService";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, Suspense } from "react";
 
-export default function Signin() {
+function SigninInner() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
+
 	const token =
 		typeof window !== "undefined" ? localStorage.getItem("token") : null;
 	const redirectTo = searchParams.get("redirect") || "/home";
@@ -27,7 +28,6 @@ export default function Signin() {
 				}, 1000);
 			}
 		} catch (error) {
-			// Error handling is managed by signIn function
 			console.error("Signin navigation error", error);
 		}
 	};
@@ -42,5 +42,13 @@ export default function Signin() {
 				</a>
 			</h2>
 		</main>
+	);
+}
+
+export default function Signin() {
+	return (
+		<Suspense fallback={<div>Loading...</div>}>
+			<SigninInner />
+		</Suspense>
 	);
 }
