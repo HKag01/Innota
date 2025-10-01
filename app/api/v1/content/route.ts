@@ -45,7 +45,7 @@ Respond ONLY as JSON: { "title": "...", "description": "..." }
 
 	try {
 		const genResp = await ai.models.generateContent({
-			model: "gemini-1.5-flash",
+			model: "gemini-2.0-flash",
 			contents: [{ role: "user", parts: [{ text: prompt }] }],
 			config: { responseMimeType: "application/json" },
 		});

@@ -29,7 +29,6 @@ export async function POST(req: Request) {
 			);
 		}
 
-		// Daily rate limit
 		const todayStart = new Date();
 		todayStart.setHours(0, 0, 0, 0);
 		const searchesToday = await prisma.searchLog.count({
@@ -42,10 +41,8 @@ export async function POST(req: Request) {
 			);
 		}
 
-		// 1️⃣ Embed the query
 		const queryEmbedding = await getGeminiEmbedding(query);
 
-		// 2️⃣ Vector search on ContentChunk table for better context
 		const results: any[] = await prisma.$queryRaw`
 			SELECT
 				cc."chunkText",
@@ -99,7 +96,7 @@ Question: "${query}"
 Answer:`;
 
 		const aiResp = await ai.models.generateContent({
-			model: "gemini-1.5-flash",
+			model: "gemini-2.0-flash",
 			contents: [{ role: "user", parts: [{ text: prompt }] }],
 		});
 

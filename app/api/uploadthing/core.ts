@@ -1,10 +1,8 @@
-// app/api/uploadthing/core.ts
 import { createUploadthing, type FileRouter } from "uploadthing/next";
 
 const f = createUploadthing();
 
 export const ourFileRouter = {
-	// Matches the endpoint name in your UploadButton
 	pdfUploader: f({ pdf: { maxFileSize: "16MB" } }).onUploadComplete(
 		async ({ file, metadata }) => {
 			console.log("Uploaded file URL:", file.url);
